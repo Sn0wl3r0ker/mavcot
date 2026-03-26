@@ -3,7 +3,7 @@
 import ctypes
 import traceback
 from pymavlink import mavutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from mavcot.helpers import get_geoid_height
 import xml.etree.ElementTree as ET
 import os, sys, time, socket, math, configparser, importlib.resources
@@ -209,22 +209,29 @@ def main():
             ''' CoT height uses HAE, not MSL. Must calculate conversion from Geoid to Ellipsod height '''
             hae = alt_msl_m + get_geoid_height(lat,lon)
 
-            timestamp_string = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            now_utc = datetime.utcnow()
+            stale_utc = now_utc + timedelta(seconds=60)
+            timestamp_string = now_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            stale_string = stale_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
             ''' Assemble XML Cot Message '''
             cot_event_element = ET.Element('event')
             cot_event_element.set('xmlns:xsi', 'http://www.w3.org/2001/XMLSchema-instance')
             cot_event_element.set('xmlns:xsd', 'http://www.w3.org/2001/XMLSchema')
+            cot_event_element.set('version', '2.0')
             cot_event_element.set('uid', cot_uid)
             cot_event_element.set('type', cot_type)
+            cot_event_element.set('how', 'm-g')
             cot_event_element.set('time', timestamp_string)
             cot_event_element.set('start', timestamp_string)
-            cot_event_element.set('stale', timestamp_string)
+            cot_event_element.set('stale', stale_string)
 
             cot_point_element = ET.SubElement(cot_event_element, 'point')
             cot_point_element.set('lat', str(lat))
             cot_point_element.set('lon', str(lon))
             cot_point_element.set('hae', str(hae))
+            cot_point_element.set('ce', '10.0')
+            cot_point_element.set('le', '10.0')
 
             cot_detail_element = ET.SubElement(cot_event_element, 'detail')
             cot_track_element = ET.SubElement(cot_detail_element, 'track')
