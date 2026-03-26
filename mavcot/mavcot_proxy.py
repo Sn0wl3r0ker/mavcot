@@ -37,6 +37,15 @@ def main():
     # Configure Socket Connection
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+    # Disable SIO_UDP_CONNRESET on Windows to prevent WinError 10054
+    if os.name == 'nt':
+        SIO_UDP_CONNRESET = -1744830452
+        try:
+            s.ioctl(SIO_UDP_CONNRESET, False)
+        except Exception:
+            pass
+
     address = (cot_address, cot_port)
 
     # Assert Mavlink 2
@@ -44,6 +53,14 @@ def main():
 
     print("Waiting for MAVLink Socket")
     mav = mavutil.mavlink_connection(mavlink_address_string, retries=20)
+    
+    # Disable SIO_UDP_CONNRESET for MAVLink socket too (if it's a UDP socket)
+    if os.name == 'nt' and hasattr(mav, 'port') and hasattr(mav.port, 'ioctl'):
+        try:
+            SIO_UDP_CONNRESET = -1744830452
+            mav.port.ioctl(SIO_UDP_CONNRESET, False)
+        except Exception:
+            pass
 
     print("UDP Listening, waiting for heartbeat")
     mav.wait_heartbeat()
