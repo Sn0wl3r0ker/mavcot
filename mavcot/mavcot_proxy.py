@@ -234,10 +234,19 @@ def main():
             cot_point_element.set('le', '10.0')
 
             cot_detail_element = ET.SubElement(cot_event_element, 'detail')
+
+            # WinTAK commonly expects a contact callsign for stable map labeling.
+            cot_contact_element = ET.SubElement(cot_detail_element, 'contact')
+            cot_contact_element.set('callsign', cot_uid)
+
             cot_track_element = ET.SubElement(cot_detail_element, 'track')
             cot_track_element.set('course', str(course_degrees))
             cot_track_element.set('speed', str(speed_3d_ms))
             cot_track_element.set('slope', str(slope_degrees))
+
+            cot_precision_element = ET.SubElement(cot_detail_element, 'precisionlocation')
+            cot_precision_element.set('altsrc', 'GPS')
+            cot_precision_element.set('geopointsrc', 'GPS')
 
             event_xml_string = ET.tostring(cot_event_element, encoding='unicode')
             header_string = '<?xml version="1.0" standalone="yes"?>'
