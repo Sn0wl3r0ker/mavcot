@@ -11,11 +11,11 @@ def is_multicast(ip):
 
 def parse_args():
   parser = argparse.ArgumentParser(description="Send CoT UDP packets for WinTAK testing")
-  parser.add_argument("--ip", default="127.0.0.1", help="Destination IP (unicast or multicast)")
+  parser.add_argument("--ip", default="100.125.235.62", help="Destination IP (unicast or multicast)")
   parser.add_argument("--port", type=int, default=6969, help="Destination UDP port")
   parser.add_argument("--rate", type=float, default=1.0, help="Packets per second")
-  parser.add_argument("--uid", default="UAV_NYCU", help="CoT uid")
-  parser.add_argument("--callsign", default="UAV_NYCU", help="CoT callsign")
+  parser.add_argument("--uid", default="UAV_NYCUtest", help="CoT uid")
+  parser.add_argument("--callsign", default="UAV_NYCUtest", help="CoT callsign")
   return parser.parse_args()
 
 
