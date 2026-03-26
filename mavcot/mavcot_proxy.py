@@ -1,11 +1,68 @@
 #!/usr/bin/env python3
 
+import ctypes
 import traceback
 from pymavlink import mavutil
 from datetime import datetime
 from mavcot.helpers import get_geoid_height
 import xml.etree.ElementTree as ET
 import os, sys, time, socket, math, configparser, importlib.resources
+
+SIO_UDP_CONNRESET = 0x9800000C
+
+
+def disable_windows_udp_connreset(sock_obj, label):
+    if os.name != 'nt' or sock_obj is None or not hasattr(sock_obj, 'fileno'):
+        return
+
+    disable_flag = ctypes.c_uint32(0)
+    bytes_returned = ctypes.c_uint32(0)
+
+    try:
+        result = ctypes.windll.ws2_32.WSAIoctl(
+            ctypes.c_size_t(sock_obj.fileno()),
+            SIO_UDP_CONNRESET,
+            ctypes.byref(disable_flag),
+            ctypes.sizeof(disable_flag),
+            None,
+            0,
+            ctypes.byref(bytes_returned),
+            None,
+            None,
+        )
+        if result != 0:
+            error_code = ctypes.windll.ws2_32.WSAGetLastError()
+            print(f'Warning: could not disable UDP connreset on {label} (WSA error {error_code})')
+    except Exception as exc:
+        print(f'Warning: could not disable UDP connreset on {label}: {exc}')
+
+
+def iter_socket_candidates(mav_connection):
+    seen = set()
+    for candidate in (
+        mav_connection,
+        getattr(mav_connection, 'port', None),
+        getattr(getattr(mav_connection, 'port', None), 'sock', None),
+    ):
+        if candidate is None:
+            continue
+        candidate_id = id(candidate)
+        if candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        yield candidate
+
+
+def build_mavlink_connection_string(config):
+    configured_connection = config.get('mavlink', 'connection_string', fallback='').strip()
+    if configured_connection:
+        return configured_connection
+
+    mav_address = config.get('mavlink', 'address')
+    mav_port = config.getint('mavlink', 'port')
+    default_transport = 'udpin' if os.name == 'nt' else 'udp'
+    mav_transport = config.get('mavlink', 'transport', fallback=default_transport).strip() or default_transport
+    return f'{mav_transport}:{mav_address}:{mav_port}'
 
 def main():
     try:
@@ -24,9 +81,7 @@ def main():
     config = configparser.RawConfigParser()
     config.read(config_path)
 
-    mav_address = config.get('mavlink', 'address')
-    mav_port = config.getint('mavlink', 'port')
-    mavlink_address_string = 'udp:' + mav_address + ':' + str(mav_port)
+    mavlink_address_string = build_mavlink_connection_string(config)
 
     cot_address = config.get('cot', 'address')
     cot_port = config.getint('cot', 'port')
@@ -37,14 +92,7 @@ def main():
     # Configure Socket Connection
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-
-    # Disable SIO_UDP_CONNRESET on Windows to prevent WinError 10054
-    if os.name == 'nt':
-        SIO_UDP_CONNRESET = -1744830452
-        try:
-            s.ioctl(SIO_UDP_CONNRESET, False)
-        except Exception:
-            pass
+    disable_windows_udp_connreset(s, 'CoT UDP socket')
 
     address = (cot_address, cot_port)
 
@@ -52,15 +100,11 @@ def main():
     os.environ['mavlink20'] = "1"
 
     print("Waiting for MAVLink Socket")
+    print(f"Using MAVLink connection: {mavlink_address_string}")
     mav = mavutil.mavlink_connection(mavlink_address_string, retries=20)
-    
-    # Disable SIO_UDP_CONNRESET for MAVLink socket too (if it's a UDP socket)
-    if os.name == 'nt' and hasattr(mav, 'port') and hasattr(mav.port, 'ioctl'):
-        try:
-            SIO_UDP_CONNRESET = -1744830452
-            mav.port.ioctl(SIO_UDP_CONNRESET, False)
-        except Exception:
-            pass
+
+    for sock_candidate in iter_socket_candidates(mav):
+        disable_windows_udp_connreset(sock_candidate, f'MAVLink socket {type(sock_candidate).__name__}')
 
     print("UDP Listening, waiting for heartbeat")
     mav.wait_heartbeat()
@@ -74,7 +118,14 @@ def main():
         try:
             msg = mav.recv_match(type='GLOBAL_POSITION_INT')
         except Exception as e:
-            print('MAVLink Socket Error', e)
+            if getattr(e, 'winerror', None) == 10054:
+                print(
+                    "MAVLink Socket Error: [WinError 10054] Windows received a UDP reset. "
+                    "If needed, set [mavlink] transport: udpin or provide connection_string explicitly."
+                )
+            else:
+                print('MAVLink Socket Error', e)
+            time.sleep(1)
             msg = None
         if msg is not None and ((time.time() - last_sent_time) > (1/cot_rate_hz)):
 

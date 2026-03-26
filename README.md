@@ -17,6 +17,7 @@ Configuration Example:
 ```
 # mavcot_cobalt.conf
 [mavlink]
+transport: udpin
 address: 127.0.0.1
 port: 14550
 
@@ -27,3 +28,5 @@ output_rate_hz: 1
 uid: UAV_005
 type: a-f-A-M-F-Q
 ```
+
+On Windows, `transport: udpin` is usually the safest choice for incoming MAVLink UDP streams and helps avoid `WinError 10054`.
