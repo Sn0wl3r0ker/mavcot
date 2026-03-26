@@ -3,7 +3,7 @@ Publishes Cursor on Target events from a MAVLINK feed via UDP
 
 Install:
 ```
-git clone https://github.com/DavidIngraham/mavcot.git
+git clone https://github.com/Sn0wl3r0ker/mavcot.git
 cd mavcot
 pip install .
 ```

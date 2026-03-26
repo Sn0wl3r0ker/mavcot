@@ -1,4 +1,4 @@
-import geoid
+from . import geoid
 
 geoid_height_table = geoid.GeoidHeight()
 

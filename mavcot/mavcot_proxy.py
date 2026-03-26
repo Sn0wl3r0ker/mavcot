@@ -1,10 +1,10 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 
 from pymavlink import mavutil
 from datetime import datetime
 from mavcot.helpers import get_geoid_height
 import xml.etree.ElementTree as ET
-import os, sys, time, socket, math, ConfigParser, pkg_resources
+import os, sys, time, socket, math, configparser, pkg_resources
 
 config_path = pkg_resources.resource_filename('mavcot', 'mavcot.conf')
 
@@ -13,7 +13,7 @@ if len(sys.argv) > 1:
 	config_path = sys.argv[1]
 
 # Parse user configuration
-config = ConfigParser.RawConfigParser()
+config = configparser.RawConfigParser()
 config.read(config_path)
 
 mav_address = config.get('mavlink', 'address')
@@ -76,7 +76,7 @@ while True:
 		''' CoT height uses HAE, not MSL. Must calculate conversion from Geoid to Ellipsod height '''
 		hae = alt_msl_m + get_geoid_height(lat,lon)
 
-		timestamp_string = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%FZ')
+		timestamp_string = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
 		''' Assemble XML Cot Message '''
 		cot_event_element = ET.Element('event')
@@ -99,12 +99,12 @@ while True:
 		cot_track_element.set('speed', str(speed_3d_ms))
 		cot_track_element.set('slope', str(slope_degrees))
 
-		event_xml_string = ET.tostring(cot_event_element)
+		event_xml_string = ET.tostring(cot_event_element, encoding='unicode')
 		header_string = '<?xml version="1.0" standalone="yes"?>'
 		out_cot_xml = header_string + event_xml_string
 		print(out_cot_xml)
 		try:
-			s.sendto(out_cot_xml, address)
+			s.sendto(out_cot_xml.encode('utf-8'), address)
 			last_sent_time = time.time()
 		except Exception as e:
 			print('COT Socket Error:', e)
