@@ -130,7 +130,7 @@ class GeoidHeight(object):
                 raise GeoidBadDataFile("File has the wrong length")
 
             self.headerlen = headerlen
-            self.raw = mmap.mmap(fd, fullsize, mmap.MAP_SHARED, mmap.PROT_READ)
+            self.raw = mmap.mmap(fd, fullsize, access=mmap.ACCESS_READ)
 
         self.rlonres = self.width / 360.0
         self.rlatres = (self.height - 1) / 180.0
