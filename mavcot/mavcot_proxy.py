@@ -64,6 +64,66 @@ def build_mavlink_connection_string(config):
     mav_transport = config.get('mavlink', 'transport', fallback=default_transport).strip() or default_transport
     return f'{mav_transport}:{mav_address}:{mav_port}'
 
+
+def wait_for_heartbeat(mav, status_interval=5):
+    print("UDP Listening, waiting for heartbeat")
+    last_status_time = time.time()
+
+    while True:
+        heartbeat = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
+        if heartbeat is not None:
+            print(
+                "Heartbeat received: "
+                f"sysid={mav.target_system} "
+                f"compid={mav.target_component} "
+                f"type={getattr(heartbeat, 'type', 'unknown')} "
+                f"autopilot={getattr(heartbeat, 'autopilot', 'unknown')}"
+            )
+            return heartbeat
+
+        now = time.time()
+        if now - last_status_time >= status_interval:
+            print("Still waiting for heartbeat...")
+            last_status_time = now
+
+
+def wait_for_gps_data(mav, status_interval=5):
+    print("Heartbeat locked, waiting for GPS data")
+    last_status_time = time.time()
+    last_gps_report = None
+
+    while True:
+        msg = mav.recv_match(type=['GPS_RAW_INT', 'GLOBAL_POSITION_INT'], blocking=True, timeout=1)
+        if msg is None:
+            now = time.time()
+            if now - last_status_time >= status_interval:
+                if last_gps_report is None:
+                    print("Still waiting for GPS data...")
+                else:
+                    print(f"Still waiting for usable position data. Last GPS status: {last_gps_report}")
+                last_status_time = now
+            continue
+
+        if msg.get_type() == 'GPS_RAW_INT':
+            fix_type = getattr(msg, 'fix_type', None)
+            satellites_visible = getattr(msg, 'satellites_visible', None)
+            last_gps_report = f"fix_type={fix_type}, satellites_visible={satellites_visible}"
+            print(f"GPS_RAW_INT received: {last_gps_report}")
+
+            if fix_type is not None and fix_type >= 2:
+                print("GPS fix acquired from GPS_RAW_INT")
+                return
+
+        elif msg.get_type() == 'GLOBAL_POSITION_INT':
+            lat = getattr(msg, 'lat', 0) / 10000000.0
+            lon = getattr(msg, 'lon', 0) / 10000000.0
+            alt_m = getattr(msg, 'alt', 0) / 1000.0
+            print(
+                "GLOBAL_POSITION_INT received: "
+                f"lat={lat:.7f} lon={lon:.7f} alt_msl_m={alt_m:.2f}"
+            )
+            return
+
 def main():
     try:
         # For Python 3.9+ we use importlib.resources.files
@@ -106,11 +166,9 @@ def main():
     for sock_candidate in iter_socket_candidates(mav):
         disable_windows_udp_connreset(sock_candidate, f'MAVLink socket {type(sock_candidate).__name__}')
 
-    print("UDP Listening, waiting for heartbeat")
-    mav.wait_heartbeat()
-    print("Connected, Waiting for fix")
-    mav.wait_gps_fix()
-    print("Fix acquired, running")
+    wait_for_heartbeat(mav)
+    wait_for_gps_data(mav)
+    print("GPS ready, running")
 
     last_sent_time = time.time()
 
