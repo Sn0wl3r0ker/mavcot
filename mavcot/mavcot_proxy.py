@@ -237,9 +237,22 @@ def main():
 
     cot_address = config.get('cot', 'address')
     cot_port = config.getint('cot', 'port')
-    cot_rate_hz = config.getfloat('cot','output_rate_hz')
-    cot_uid = config.get('cot', 'uid')
-    cot_type = config.get('cot', 'type')
+
+    # Backward/forward compatibility:
+    # - legacy key: output_rate_hz
+    # - ROS-style key: send_rate_hz
+    if config.has_option('cot', 'output_rate_hz'):
+        cot_rate_hz = config.getfloat('cot', 'output_rate_hz')
+    elif config.has_option('cot', 'send_rate_hz'):
+        cot_rate_hz = config.getfloat('cot', 'send_rate_hz')
+    else:
+        cot_rate_hz = 1.0
+
+    if cot_rate_hz <= 0:
+        raise ValueError('[cot] output_rate_hz/send_rate_hz must be > 0')
+
+    cot_uid = config.get('cot', 'uid', fallback='UAV_NYCU')
+    cot_type = config.get('cot', 'type', fallback='a-f-A-M-F-Q')
     cot_transport = config.get('cot', 'transport', fallback='udp').strip().lower()
 
     if cot_transport not in ('udp', 'tls'):
