@@ -2,6 +2,7 @@
 
 import ctypes
 import traceback
+import ipaddress
 from pymavlink import mavutil
 from datetime import datetime, timedelta
 from mavcot.helpers import get_geoid_height
@@ -63,6 +64,13 @@ def build_mavlink_connection_string(config):
     default_transport = 'udpin' if os.name == 'nt' else 'udp'
     mav_transport = config.get('mavlink', 'transport', fallback=default_transport).strip() or default_transport
     return f'{mav_transport}:{mav_address}:{mav_port}'
+
+
+def is_multicast_address(address):
+    try:
+        return ipaddress.ip_address(address).is_multicast
+    except ValueError:
+        return False
 
 
 def wait_for_heartbeat(mav, status_interval=5):
@@ -152,6 +160,12 @@ def main():
     # Configure Socket Connection
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+    # WinTAK multicast subscriptions are more reliable when loopback and TTL are explicit.
+    if is_multicast_address(cot_address):
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+
     disable_windows_udp_connreset(s, 'CoT UDP socket')
 
     address = (cot_address, cot_port)
