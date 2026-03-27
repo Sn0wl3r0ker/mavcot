@@ -108,7 +108,9 @@ class TLSSocketSender:
         self.client_key = client_key
         self.ca_cert = ca_cert
         self.verify_server = verify_server
-        self.server_hostname = server_hostname or host
+        # If server_hostname is omitted, keep hostname verification disabled.
+        self.server_hostname = server_hostname
+        self.sni_hostname = server_hostname or host
         self.reconnect_sec = max(0.5, float(reconnect_sec))
         self.delimiter = b'\x00' if framing == 'nul' else b'\n'
         self.sock = None
@@ -131,7 +133,7 @@ class TLSSocketSender:
     def _connect(self):
         raw = socket.create_connection((self.host, self.port), timeout=10)
         raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self.sock = self.ctx.wrap_socket(raw, server_hostname=self.server_hostname)
+        self.sock = self.ctx.wrap_socket(raw, server_hostname=self.sni_hostname)
         print(f'FTS mTLS connected to {self.host}:{self.port}')
 
     def _close(self):
