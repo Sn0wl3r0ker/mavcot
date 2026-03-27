@@ -3,6 +3,7 @@
 import ctypes
 import traceback
 import ipaddress
+import ssl
 from pymavlink import mavutil
 from datetime import datetime, timedelta
 from mavcot.helpers import get_geoid_height
@@ -71,6 +72,89 @@ def is_multicast_address(address):
         return ipaddress.ip_address(address).is_multicast
     except ValueError:
         return False
+
+
+def parse_bool(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def resolve_config_path(config_path, maybe_relative_path):
+    path = (maybe_relative_path or '').strip()
+    if not path:
+        return ''
+    if os.path.isabs(path):
+        return path
+    return os.path.abspath(os.path.join(os.path.dirname(config_path), path))
+
+
+class TLSSocketSender:
+    def __init__(
+        self,
+        host,
+        port,
+        client_cert,
+        client_key,
+        ca_cert,
+        verify_server=True,
+        server_hostname=None,
+        framing='nul',
+        reconnect_sec=3.0,
+    ):
+        self.host = host
+        self.port = port
+        self.client_cert = client_cert
+        self.client_key = client_key
+        self.ca_cert = ca_cert
+        self.verify_server = verify_server
+        self.server_hostname = server_hostname or host
+        self.reconnect_sec = max(0.5, float(reconnect_sec))
+        self.delimiter = b'\x00' if framing == 'nul' else b'\n'
+        self.sock = None
+        self.ctx = self._build_ssl_context()
+
+    def _build_ssl_context(self):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.load_cert_chain(certfile=self.client_cert, keyfile=self.client_key)
+
+        if self.verify_server:
+            ctx.load_verify_locations(cafile=self.ca_cert)
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            ctx.check_hostname = bool(self.server_hostname)
+        else:
+            ctx.verify_mode = ssl.CERT_NONE
+            ctx.check_hostname = False
+
+        return ctx
+
+    def _connect(self):
+        raw = socket.create_connection((self.host, self.port), timeout=10)
+        raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.sock = self.ctx.wrap_socket(raw, server_hostname=self.server_hostname)
+        print(f'FTS mTLS connected to {self.host}:{self.port}')
+
+    def _close(self):
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+        self.sock = None
+
+    def send(self, cot_xml):
+        payload = cot_xml.encode('utf-8') + self.delimiter
+
+        while True:
+            try:
+                if self.sock is None:
+                    self._connect()
+                self.sock.sendall(payload)
+                return
+            except Exception as exc:
+                print(f'FTS TLS Socket Error: {exc}')
+                self._close()
+                time.sleep(self.reconnect_sec)
 
 
 def wait_for_heartbeat(mav, status_interval=5):
@@ -156,19 +240,57 @@ def main():
     cot_rate_hz = config.getfloat('cot','output_rate_hz')
     cot_uid = config.get('cot', 'uid')
     cot_type = config.get('cot', 'type')
+    cot_transport = config.get('cot', 'transport', fallback='udp').strip().lower()
 
-    # Configure Socket Connection
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    if cot_transport not in ('udp', 'tls'):
+        raise ValueError("[cot] transport must be 'udp' or 'tls'")
 
-    # WinTAK multicast subscriptions are more reliable when loopback and TTL are explicit.
-    if is_multicast_address(cot_address):
-        s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
-        s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+    s = None
+    tls_sender = None
 
-    disable_windows_udp_connreset(s, 'CoT UDP socket')
+    if cot_transport == 'udp':
+        # Configure UDP Socket Connection
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
-    address = (cot_address, cot_port)
+        # WinTAK multicast subscriptions are more reliable when loopback and TTL are explicit.
+        if is_multicast_address(cot_address):
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+            s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+
+        disable_windows_udp_connreset(s, 'CoT UDP socket')
+
+        address = (cot_address, cot_port)
+        print(f'CoT output transport: UDP -> {cot_address}:{cot_port}')
+    else:
+        client_cert = resolve_config_path(config_path, config.get('cot', 'client_cert', fallback=''))
+        client_key = resolve_config_path(config_path, config.get('cot', 'client_key', fallback=''))
+        ca_cert = resolve_config_path(config_path, config.get('cot', 'ca_cert', fallback=''))
+        server_hostname = config.get('cot', 'server_hostname', fallback='').strip() or None
+        verify_server = parse_bool(config.get('cot', 'verify_server', fallback='true'), default=True)
+        framing = config.get('cot', 'framing', fallback='nul').strip().lower()
+        reconnect_sec = config.getfloat('cot', 'reconnect_sec', fallback=3.0)
+
+        if framing not in ('nul', 'newline'):
+            raise ValueError("[cot] framing must be 'nul' or 'newline'")
+
+        if not client_cert or not client_key or not ca_cert:
+            raise ValueError(
+                "TLS mode requires [cot] client_cert, client_key, and ca_cert in config."
+            )
+
+        tls_sender = TLSSocketSender(
+            host=cot_address,
+            port=cot_port,
+            client_cert=client_cert,
+            client_key=client_key,
+            ca_cert=ca_cert,
+            verify_server=verify_server,
+            server_hostname=server_hostname,
+            framing=framing,
+            reconnect_sec=reconnect_sec,
+        )
+        print(f'CoT output transport: TLS -> {cot_address}:{cot_port} (framing={framing})')
 
     # Assert Mavlink 2
     os.environ['mavlink20'] = "1"
@@ -267,7 +389,10 @@ def main():
             out_cot_xml = header_string + event_xml_string
             print(out_cot_xml)
             try:
-                s.sendto(out_cot_xml.encode('utf-8'), address)
+                if cot_transport == 'udp':
+                    s.sendto(out_cot_xml.encode('utf-8'), address)
+                else:
+                    tls_sender.send(out_cot_xml)
                 last_sent_time = time.time()
             except Exception as e:
                 print('COT Socket Error:', e)
